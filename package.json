@@ -1,0 +1,15 @@
+{
+  "name": "pub-viewer",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "cfb": "^1.2.2"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}
