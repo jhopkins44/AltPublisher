@@ -1,7 +1,7 @@
 const fs = require('fs');
 const CFB = require('cfb');
 
-const ESCHER_CONTAINER_IDS = new Set([0xF000, 0xF001, 0xF002, 0xF003, 0xF004]);
+const ESCHER_CONTAINER_IDS = new Set([0xF000, 0xF001, 0xF002, 0xF003, 0xF004, 0xF018]);
 
 const ESCHER_NAMES = new Map([
   [0xF000, 'DggContainer'],
@@ -24,25 +24,6 @@ const ESCHER_NAMES = new Map([
   [0xF018, 'SolverContainer'],
   [0xF122, 'ShapeProps'],
 ]);
-
-const CARD_SHEET_MODEL = {
-  canvasWidth: 1275,
-  canvasHeight: 1650,
-  cards: [
-    { row: 1, col: 1, x: 54, y: 36, w: 548, h: 247, lion: { x: 263, y: 90, w: 129, h: 145 } },
-    { row: 1, col: 2, x: 672, y: 37, w: 548, h: 246, lion: { x: 881, y: 90, w: 130, h: 145 } },
-    { row: 2, col: 1, x: 54, y: 305, w: 548, h: 247, lion: { x: 263, y: 359, w: 129, h: 145 } },
-    { row: 2, col: 2, x: 672, y: 305, w: 547, h: 246, lion: { x: 880, y: 358, w: 130, h: 145 } },
-    { row: 3, col: 1, x: 54, y: 571, w: 548, h: 247, lion: { x: 263, y: 624, w: 129, h: 146 } },
-    { row: 3, col: 2, x: 672, y: 570, w: 547, h: 247, lion: { x: 880, y: 624, w: 130, h: 145 } },
-    { row: 4, col: 1, x: 54, y: 839, w: 548, h: 247, lion: { x: 263, y: 893, w: 130, h: 145 } },
-    { row: 4, col: 2, x: 672, y: 839, w: 548, h: 247, lion: { x: 881, y: 892, w: 129, h: 145 } },
-    { row: 5, col: 1, x: 55, y: 1109, w: 548, h: 247, lion: { x: 263, y: 1163, w: 130, h: 145 } },
-    { row: 5, col: 2, x: 672, y: 1108, w: 548, h: 247, lion: { x: 881, y: 1162, w: 130, h: 145 } },
-    { row: 6, col: 1, x: 55, y: 1378, w: 548, h: 247, lion: { x: 263, y: 1431, w: 130, h: 145 } },
-    { row: 6, col: 2, x: 672, y: 1377, w: 548, h: 247, lion: { x: 881, y: 1430, w: 130, h: 146 } },
-  ]
-};
 
 function recordName(id) {
   return ESCHER_NAMES.get(id) || `0x${id.toString(16).toUpperCase()}`;
@@ -155,7 +136,7 @@ function summarizeBytes(buffer, limit = 16) {
   return Array.from(slice, byte => byte.toString(16).padStart(2, '0')).join(' ');
 }
 
-function parseEscherRange(buffer, start, end) {
+function parseEscherRange(buffer, start, end, diagnostics, ancestry = []) {
   const nodes = [];
   let pos = start;
 
@@ -167,26 +148,38 @@ function parseEscherRange(buffer, start, end) {
     const instance = opt >> 4;
     const payloadStart = pos + 8;
     const payloadEnd = payloadStart + len;
+    const recName = recordName(rid);
 
     if (payloadEnd > end) {
       nodes.push({
         kind: 'record',
+        name: recName,
         offset: pos,
         recordId: rid,
-        recordName: recordName(rid),
+        recordName: recName,
         version,
         instance,
         length: len,
         error: 'record length exceeds container bounds'
+      });
+
+      diagnostics.push({
+        type: 'parse-error',
+        recordId: rid,
+        recordName: recName,
+        offset: pos,
+        context: ancestry.join(' > '),
+        message: 'Record length exceeds container bounds'
       });
       break;
     }
 
     const node = {
       kind: 'record',
+      name: recName,
       offset: pos,
       recordId: rid,
-      recordName: recordName(rid),
+      recordName: recName,
       version,
       instance,
       length: len
@@ -194,12 +187,30 @@ function parseEscherRange(buffer, start, end) {
 
     const payload = buffer.subarray(payloadStart, payloadEnd);
     if (ESCHER_CONTAINER_IDS.has(rid)) {
-      node.children = parseEscherRange(buffer, payloadStart, payloadEnd);
+      node.children = parseEscherRange(
+        buffer,
+        payloadStart,
+        payloadEnd,
+        diagnostics,
+        [...ancestry, recName]
+      );
     } else {
       node.payload = {
         length: payload.length,
         preview: summarizeBytes(payload, 24)
       };
+
+      if (!ESCHER_NAMES.has(rid)) {
+        diagnostics.push({
+          type: 'unsupported-record',
+          recordId: rid,
+          recordName: recName,
+          offset: pos,
+          length: len,
+          context: ancestry.join(' > ') || '(root EscherStm)'
+        });
+      }
+
       if (rid === 0xF009 || rid === 0xF011 || rid === 0xF00B || rid === 0xF122) {
         node.payloadWords16 = [];
         for (let i = 0; i + 2 <= Math.min(payload.length, 24); i += 2) {
@@ -235,13 +246,126 @@ function annotateEscherTree(nodes) {
   }
 }
 
-function parseEscherStream(buffer) {
-  const records = parseEscherRange(buffer, 0, buffer.length);
+function parseEscherStream(buffer, diagnostics) {
+  const records = parseEscherRange(buffer, 0, buffer.length, diagnostics);
   annotateEscherTree(records);
   return records;
 }
 
-function decorateStreamNode(node, content) {
+function findPngPayload(buffer) {
+  const pngSig = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  const start = buffer.indexOf(pngSig);
+  if (start < 0) {
+    return null;
+  }
+  return buffer.subarray(start);
+}
+
+function readPngDimensions(pngPayload) {
+  if (!pngPayload || pngPayload.length < 24) {
+    return null;
+  }
+  return {
+    width: pngPayload.readUInt32BE(16),
+    height: pngPayload.readUInt32BE(20)
+  };
+}
+
+function summarizeUnsupportedRecords(diagnostics) {
+  const unsupported = diagnostics.filter(item => item.type === 'unsupported-record');
+  const grouped = new Map();
+
+  for (const item of unsupported) {
+    const key = item.recordId;
+    const current = grouped.get(key) || {
+      recordId: item.recordId,
+      recordName: item.recordName,
+      count: 0
+    };
+    current.count += 1;
+    grouped.set(key, current);
+  }
+
+  return {
+    total: unsupported.length,
+    byRecordId: Array.from(grouped.values()).sort((a, b) => b.count - a.count)
+  };
+}
+
+function buildProjectDocument(fileName, streams, diagnostics) {
+  const assets = [];
+  const pages = [];
+  const warnings = [];
+
+  const embeddedPng = streams.escherDelay ? findPngPayload(streams.escherDelay) : null;
+  if (embeddedPng) {
+    const dimensions = readPngDimensions(embeddedPng) || { width: 1275, height: 1650 };
+    const assetId = 'asset-preview-png';
+    assets.push({
+      id: assetId,
+      kind: 'image',
+      mimeType: 'image/png',
+      width: dimensions.width,
+      height: dimensions.height,
+      encoding: 'base64',
+      data: embeddedPng.toString('base64')
+    });
+
+    pages.push({
+      id: 'page-1',
+      name: 'Page 1',
+      width: dimensions.width,
+      height: dimensions.height,
+      objects: [
+        {
+          id: 'obj-preview-image',
+          name: 'Imported page preview',
+          type: 'image',
+          assetId,
+          x: 0,
+          y: 0,
+          width: dimensions.width,
+          height: dimensions.height,
+          opacity: 1
+        }
+      ]
+    });
+  } else {
+    warnings.push('No embedded PNG payload found in EscherDelayStm. Falling back to blank page.');
+    pages.push({
+      id: 'page-1',
+      name: 'Page 1',
+      width: 1275,
+      height: 1650,
+      objects: []
+    });
+  }
+
+  const unsupported = summarizeUnsupportedRecords(diagnostics);
+  warnings.push(
+    `Unsupported Escher records detected: ${unsupported.total}. Use diagnostics panel for details.`
+  );
+
+  return {
+    format: 'altpub.v1',
+    source: {
+      type: 'pub-import',
+      originalFileName: fileName
+    },
+    meta: {
+      title: fileName,
+      schemaVersion: 1
+    },
+    pages,
+    assets,
+    diagnostics: {
+      unsupportedSummary: unsupported
+    },
+    warnings
+  };
+}
+
+function decorateStreamNode(node, content, diagnostics) {
   const summary = {
     size: content.length
   };
@@ -253,9 +377,8 @@ function decorateStreamNode(node, content) {
 
   if (node.name === 'EscherStm') {
     summary.format = 'Escher drawing tree';
-    summary.records = parseEscherStream(content);
+    summary.records = parseEscherStream(content, diagnostics);
     summary.recordCount = summary.records.length;
-    summary.renderModel = CARD_SHEET_MODEL;
   } else if (node.name === 'EscherDelayStm') {
     summary.format = 'deferred binary streams';
     summary.containsPng = content.indexOf(Buffer.from([0x89, 0x50, 0x4e, 0x47])) !== -1;
@@ -267,17 +390,17 @@ function decorateStreamNode(node, content) {
   return node;
 }
 
-function enrichTree(node, cfb) {
+function enrichTree(node, cfb, diagnostics) {
   if (node.kind === 'stream' && node.streamPath) {
     const entry = getEntry(cfb, node.streamPath);
     if (entry) {
       node.size = entry.entry.size || entry.content.length;
-      decorateStreamNode(node, entry.content);
+      decorateStreamNode(node, entry.content, diagnostics);
     }
   }
 
   if (node.children) {
-    node.children.forEach(child => enrichTree(child, cfb));
+    node.children.forEach(child => enrichTree(child, cfb, diagnostics));
   }
 
   return node;
@@ -285,13 +408,29 @@ function enrichTree(node, cfb) {
 
 async function extractStructure(filePath) {
   const cfb = readCFB(filePath);
-  const tree = enrichTree(buildOleTree(cfb), cfb);
+  const diagnostics = [];
+  const tree = enrichTree(buildOleTree(cfb), cfb, diagnostics);
+  const fileName = filePath.split(/[\\/]/).pop();
+
+  const escherDelay = getEntry(cfb, 'Root Entry/Escher/EscherDelayStm')?.content || null;
+  const escherStm = getEntry(cfb, 'Root Entry/Escher/EscherStm')?.content || null;
+  const quillContents = getEntry(cfb, 'Root Entry/Quill/QuillSub/CONTENTS')?.content || null;
+  const unsupportedSummary = summarizeUnsupportedRecords(diagnostics);
 
   return {
     filePath,
-    fileName: filePath.split(/[\\/]/).pop(),
+    fileName,
     kind: 'publisher-document',
-    root: tree
+    root: tree,
+    document: buildProjectDocument(
+      fileName,
+      { escherDelay, escherStm, quillContents },
+      diagnostics
+    ),
+    diagnostics: {
+      unsupportedRecords: diagnostics.filter(item => item.type === 'unsupported-record'),
+      unsupportedSummary
+    }
   };
 }
 
