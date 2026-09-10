@@ -127,7 +127,7 @@ Each card consists of:
 
 1. outer rectangular border
 2. decorative clipped-corner / curved-corner elements
-3. top title text: `LONGVIEW LOOT`
+3. top title text: `LEGENDARY LOOT`
 4. centered lion portrait
 5. bottom tagline text: `LISTEN • LEARN • LEAD`
 6. small `1` markers in the four corners
