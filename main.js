@@ -6,6 +6,15 @@ const { extractStructure } = require('./parser');
 let mainWindow;
 let diagnosticsPanelVisible = true;
 
+function sendLoadLog(message, level = 'info') {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('pub-load-log', {
+    timestamp: new Date().toISOString(),
+    level,
+    message
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1600,
@@ -89,9 +98,25 @@ function showError(error) {
 }
 
 async function loadPubFile(filePath) {
-  const result = await extractStructure(filePath);
-  mainWindow.webContents.send('pub-file-loaded', result);
-  return result;
+  sendLoadLog(`Opening .pub file: ${filePath}`);
+  try {
+    sendLoadLog('Parsing OLE structure and Escher records...');
+    const result = await extractStructure(filePath);
+    const objectCount = result?.document?.pages?.[0]?.objects?.length || 0;
+    const unsupportedCount = result?.diagnostics?.unsupportedSummary?.total || 0;
+    sendLoadLog(`Parsed successfully. Objects: ${objectCount}. Unsupported records: ${unsupportedCount}.`);
+    mainWindow.webContents.send('pub-file-loaded', result);
+    sendLoadLog('Published parsed document to renderer.');
+    return result;
+  } catch (error) {
+    const message = error?.message || String(error);
+    sendLoadLog(`Failed to open .pub: ${message}`, 'error');
+    mainWindow.webContents.send('pub-file-load-failed', {
+      message,
+      stack: error?.stack || null
+    });
+    throw error;
+  }
 }
 
 async function openPubDialog() {
@@ -108,7 +133,8 @@ async function openPubDialog() {
     return null;
   }
 
-  return loadPubFile(filePaths[0]);
+  await loadPubFile(filePaths[0]);
+  return true;
 }
 
 async function openProjectDialog() {

@@ -4,23 +4,38 @@ const saveProjectBtn = document.getElementById('saveProjectBtn');
 const printBtn = document.getElementById('printBtn');
 const undoBtn = document.getElementById('undoBtn');
 const redoBtn = document.getElementById('redoBtn');
+const zoomOutBtn = document.getElementById('zoomOutBtn');
+const zoomResetBtn = document.getElementById('zoomResetBtn');
+const zoomInBtn = document.getElementById('zoomInBtn');
 const status = document.getElementById('status');
 const treePane = document.getElementById('treePane');
+const structureTree = document.getElementById('structureTree');
+const elementTree = document.getElementById('elementTree');
 const detailPane = document.getElementById('detailPane');
 const renderStage = document.getElementById('renderStage');
+const renderPane = document.getElementById('renderPane');
 const diagnosticsPane = document.getElementById('diagnosticsPane');
+const logPane = document.getElementById('logPane');
 const diagnosticsSummary = document.getElementById('diagnosticsSummary');
 const diagnosticsTableWrap = document.getElementById('diagnosticsTableWrap');
 const documentWarnings = document.getElementById('documentWarnings');
+const logMessages = document.getElementById('logMessages');
+const splitterTreeDetail = document.getElementById('splitterTreeDetail');
+const splitterDetailRender = document.getElementById('splitterDetailRender');
+const splitterRenderDiagnostics = document.getElementById('splitterRenderDiagnostics');
+const splitterDiagnosticsLog = document.getElementById('splitterDiagnosticsLog');
 
 let selectedTreeElement = null;
 let currentTreeRoot = null;
 let currentDocument = null;
 let currentSource = null;
 let selectedObjectId = null;
+let zoomFactor = 1;
 const nodeElements = new Map();
+const objectTreeElements = new Map();
 const undoStack = [];
 const redoStack = [];
+const loadLogEntries = [];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -76,6 +91,62 @@ function clearTreeSelection() {
     selectedTreeElement.classList.remove('selected');
     selectedTreeElement = null;
   }
+}
+
+function clearElementSelection() {
+  for (const element of objectTreeElements.values()) {
+    element.classList.remove('selected');
+  }
+}
+
+function updateElementTreeSelection() {
+  clearElementSelection();
+  if (!selectedObjectId) return;
+  const element = objectTreeElements.get(selectedObjectId);
+  if (element) {
+    element.classList.add('selected');
+    element.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function updateZoomLabel() {
+  if (!zoomResetBtn) return;
+  zoomResetBtn.textContent = `Zoom ${Math.round(zoomFactor * 100)}%`;
+}
+
+function renderLoadLog() {
+  if (!logMessages) return;
+  logMessages.innerHTML = '';
+  if (!loadLogEntries.length) {
+    logMessages.innerHTML = '<div class="empty">Load and processing messages will appear here.</div>';
+    return;
+  }
+
+  for (const entry of loadLogEntries) {
+    const row = document.createElement('div');
+    row.className = `log-entry${entry.level === 'error' ? ' error' : ''}`;
+    const time = new Date(entry.timestamp || Date.now()).toLocaleTimeString();
+    row.innerHTML = `<span class="time">${time}</span><span>${entry.message}</span>`;
+    logMessages.appendChild(row);
+  }
+  logMessages.scrollTop = logMessages.scrollHeight;
+}
+
+function appendLoadLog(message, level = 'info', timestamp = null) {
+  loadLogEntries.push({
+    timestamp: timestamp || new Date().toISOString(),
+    level,
+    message
+  });
+  while (loadLogEntries.length > 500) {
+    loadLogEntries.shift();
+  }
+  renderLoadLog();
+}
+
+function clearLoadLog() {
+  loadLogEntries.length = 0;
+  renderLoadLog();
 }
 
 function renderTreeDetails(node) {
@@ -290,6 +361,7 @@ function renderObjectEditor(objectId) {
 
 function selectObject(objectId) {
   selectedObjectId = objectId;
+  updateElementTreeSelection();
   const treeSelectedNode = selectedTreeElement && currentTreeRoot ? currentTreeRoot : { name: 'Document', kind: 'document' };
   renderTreeDetails(treeSelectedNode);
   renderDocument();
@@ -307,6 +379,33 @@ function renderObject(svg, object) {
     node.setAttribute('y', String(object.y || 0));
     node.setAttribute('width', String(object.width || asset.width || 100));
     node.setAttribute('height', String(object.height || asset.height || 100));
+    if (object.preserveAspectRatio) {
+      node.setAttribute('preserveAspectRatio', object.preserveAspectRatio);
+    }
+  } else if (object.type === 'imageFragment') {
+    const asset = findAsset(object.assetId);
+    if (!asset || !object.source) return null;
+
+    const clipId = `clip-${object.id}`;
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const clipPath = document.createElementNS('http://www.w3.org/2000/svg', 'clipPath');
+    clipPath.setAttribute('id', clipId);
+    const clipRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    clipRect.setAttribute('x', String(object.x || 0));
+    clipRect.setAttribute('y', String(object.y || 0));
+    clipRect.setAttribute('width', String(object.width || 1));
+    clipRect.setAttribute('height', String(object.height || 1));
+    clipPath.appendChild(clipRect);
+    defs.appendChild(clipPath);
+    svg.appendChild(defs);
+
+    node = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    node.setAttribute('href', `data:${asset.mimeType};base64,${asset.data}`);
+    node.setAttribute('x', String((object.x || 0) - (object.source.x || 0)));
+    node.setAttribute('y', String((object.y || 0) - (object.source.y || 0)));
+    node.setAttribute('width', String(asset.width || object.width || 1));
+    node.setAttribute('height', String(asset.height || object.height || 1));
+    node.setAttribute('clip-path', `url(#${clipId})`);
   } else if (object.type === 'rect') {
     node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
     node.setAttribute('x', String(object.x || 0));
@@ -323,6 +422,7 @@ function renderObject(svg, object) {
     node.setAttribute('font-size', String(object.fontSize || 20));
     node.setAttribute('font-family', object.fontFamily || 'Segoe UI, Arial, sans-serif');
     node.setAttribute('fill', object.fill || '#111111');
+    node.setAttribute('text-anchor', object.textAlign === 'center' ? 'middle' : 'start');
     node.textContent = object.text || '';
   } else {
     node = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
@@ -357,7 +457,7 @@ function renderObject(svg, object) {
     highlight.setAttribute('height', String(bbox.height));
     highlight.setAttribute('fill', 'none');
     highlight.setAttribute('stroke', '#0088ff');
-    highlight.setAttribute('stroke-width', '4');
+    highlight.setAttribute('stroke-width', String(Math.max(0.3, (object.strokeWidth || 1) * 2)));
     highlight.setAttribute('stroke-dasharray', '8 6');
     svg.appendChild(node);
     svg.appendChild(highlight);
@@ -375,11 +475,23 @@ function renderDocument() {
     return;
   }
 
-  const stageWidth = Math.max(renderStage.clientWidth, 320);
-  const stageHeight = Math.max(renderStage.clientHeight, 440);
-  const scale = Math.min(stageWidth / page.width, stageHeight / page.height);
-  const displayWidth = Math.max(320, Math.floor(page.width * scale));
-  const displayHeight = Math.max(440, Math.floor(page.height * scale));
+  const rawStageWidth = renderStage.clientWidth;
+  const rawStageHeight = renderStage.clientHeight;
+  if (rawStageWidth < 10 || rawStageHeight < 10) {
+    requestAnimationFrame(() => {
+      if (currentDocument) {
+        renderDocument();
+      }
+    });
+    return;
+  }
+
+  const stageWidth = Math.max(rawStageWidth, 320);
+  const stageHeight = Math.max(rawStageHeight, 440);
+  const fitScale = Math.min(stageWidth / page.width, stageHeight / page.height);
+  const scale = Math.max(0.05, fitScale * zoomFactor);
+  const displayWidth = Math.max(120, Math.floor(page.width * scale));
+  const displayHeight = Math.max(120, Math.floor(page.height * scale));
 
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('width', displayWidth);
@@ -447,8 +559,82 @@ function renderDiagnostics(diagnostics) {
   diagnosticsTableWrap.appendChild(table);
 }
 
+function renderElementTree() {
+  objectTreeElements.clear();
+  elementTree.innerHTML = '';
+  const page = findPage();
+  const objects = Array.isArray(page?.objects) ? page.objects : [];
+  if (!objects.length) {
+    elementTree.innerHTML = '<div class="empty">No renderable elements were loaded.</div>';
+    return;
+  }
+
+  for (const object of objects) {
+    const button = document.createElement('button');
+    button.className = 'element-item';
+    const label = object.name || object.id || 'object';
+    button.textContent = `${label} · ${object.type}`;
+    button.addEventListener('click', () => {
+      selectObject(object.id);
+    });
+    objectTreeElements.set(object.id, button);
+    elementTree.appendChild(button);
+  }
+  updateElementTreeSelection();
+}
+
+function setPaneWidths(leftPane, rightPane, deltaX) {
+  const layoutWidth = treePane.parentElement.clientWidth;
+  const splitterAllowance = 24;
+  const minPane = 160;
+
+  const leftWidth = leftPane.getBoundingClientRect().width;
+  const rightWidth = rightPane.getBoundingClientRect().width;
+  const newLeft = Math.max(minPane, leftWidth + deltaX);
+  const newRight = Math.max(minPane, rightWidth - deltaX);
+  if (newLeft + newRight + splitterAllowance > layoutWidth) {
+    return;
+  }
+  leftPane.style.width = `${newLeft}px`;
+  rightPane.style.width = `${newRight}px`;
+}
+
+function wireSplitter(splitter, leftPane, rightPane) {
+  if (!splitter || !leftPane || !rightPane) return;
+
+  let dragStartX = null;
+  splitter.addEventListener('pointerdown', event => {
+    dragStartX = event.clientX;
+    splitter.classList.add('dragging');
+    splitter.setPointerCapture(event.pointerId);
+  });
+
+  splitter.addEventListener('pointermove', event => {
+    if (dragStartX === null) return;
+    const deltaX = event.clientX - dragStartX;
+    dragStartX = event.clientX;
+    setPaneWidths(leftPane, rightPane, deltaX);
+    if (currentDocument) {
+      renderDocument();
+    }
+  });
+
+  const stopDragging = event => {
+    if (dragStartX === null) return;
+    dragStartX = null;
+    splitter.classList.remove('dragging');
+    if (splitter.hasPointerCapture(event.pointerId)) {
+      splitter.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  splitter.addEventListener('pointerup', stopDragging);
+  splitter.addEventListener('pointercancel', stopDragging);
+}
+
 function resetViewForNoFile(message) {
-  treePane.innerHTML = `<div class="empty">${message}</div>`;
+  structureTree.innerHTML = `<div class="empty">${message}</div>`;
+  elementTree.innerHTML = '<div class="empty">No renderable elements were loaded.</div>';
   detailPane.innerHTML = '<div class="empty">No file loaded.</div>';
   renderStage.innerHTML = '<div class="empty">No layout available.</div>';
   diagnosticsSummary.textContent = 'No diagnostics loaded.';
@@ -459,8 +645,10 @@ function resetViewForNoFile(message) {
   currentDocument = null;
   currentSource = null;
   selectedObjectId = null;
+  zoomFactor = 1;
   undoStack.length = 0;
   redoStack.length = 0;
+  updateZoomLabel();
   updateUndoRedoButtons();
 }
 
@@ -474,25 +662,29 @@ function loadDocumentIntoView(sourceLabel, payload) {
   currentSource = sourceLabel;
   currentDocument = doc;
   selectedObjectId = null;
+  zoomFactor = 1;
   undoStack.length = 0;
   redoStack.length = 0;
+  updateZoomLabel();
 
   setStatus(`${payload.fileName || 'Untitled'} — ${sourceLabel}`);
+  appendLoadLog(`Loaded ${payload.fileName || 'file'} from ${sourceLabel}.`);
   renderWarnings();
 
   if (payload.root) {
     currentTreeRoot = payload.root;
-    treePane.innerHTML = '';
+    structureTree.innerHTML = '';
     nodeElements.clear();
     const root = renderTreeNode(payload.root, 0);
-    treePane.appendChild(root);
+    structureTree.appendChild(root);
     selectTreeNode(payload.root, root);
   } else {
     currentTreeRoot = null;
-    treePane.innerHTML = '<div class="empty">No OLE structure tree is available for this file.</div>';
+    structureTree.innerHTML = '<div class="empty">No OLE structure tree is available for this file.</div>';
     detailPane.innerHTML = '<div class="empty">Select a drawing object to edit its properties.</div>';
   }
 
+  renderElementTree();
   renderDocument();
   renderDiagnostics(payload.diagnostics || doc.diagnostics || null);
   updateUndoRedoButtons();
@@ -500,16 +692,21 @@ function loadDocumentIntoView(sourceLabel, payload) {
 
 async function openPubFile() {
   try {
+    clearLoadLog();
+    appendLoadLog('Open .pub requested.');
     await window.pubViewer.openPubFile();
   } catch (error) {
+    appendLoadLog(`Open request failed: ${error.message || String(error)}`, 'error');
     setStatus(`Open failed: ${error.message || String(error)}`);
   }
 }
 
 async function openProjectFile() {
   try {
+    appendLoadLog('Open project requested.');
     await window.pubViewer.openProjectFile();
   } catch (error) {
+    appendLoadLog(`Open project failed: ${error.message || String(error)}`, 'error');
     setStatus(`Open project failed: ${error.message || String(error)}`);
   }
 }
@@ -544,6 +741,7 @@ function undo() {
   redoStack.push(clone(currentDocument));
   currentDocument = undoStack.pop();
   selectedObjectId = null;
+  updateElementTreeSelection();
   renderWarnings();
   renderDocument();
   if (currentTreeRoot) {
@@ -559,6 +757,7 @@ function redo() {
   undoStack.push(clone(currentDocument));
   currentDocument = redoStack.pop();
   selectedObjectId = null;
+  updateElementTreeSelection();
   renderWarnings();
   renderDocument();
   if (currentTreeRoot) {
@@ -569,12 +768,33 @@ function redo() {
   updateUndoRedoButtons();
 }
 
-openPubBtn.addEventListener('click', openPubFile);
-openProjectBtn.addEventListener('click', openProjectFile);
-saveProjectBtn.addEventListener('click', saveProjectFile);
-printBtn.addEventListener('click', printDocument);
-undoBtn.addEventListener('click', undo);
-redoBtn.addEventListener('click', redo);
+if (openPubBtn) openPubBtn.addEventListener('click', openPubFile);
+if (openProjectBtn) openProjectBtn.addEventListener('click', openProjectFile);
+if (saveProjectBtn) saveProjectBtn.addEventListener('click', saveProjectFile);
+if (printBtn) printBtn.addEventListener('click', printDocument);
+if (undoBtn) undoBtn.addEventListener('click', undo);
+if (redoBtn) redoBtn.addEventListener('click', redo);
+if (zoomInBtn) {
+  zoomInBtn.addEventListener('click', () => {
+    zoomFactor = Math.min(8, zoomFactor * 1.2);
+    updateZoomLabel();
+    renderDocument();
+  });
+}
+if (zoomOutBtn) {
+  zoomOutBtn.addEventListener('click', () => {
+    zoomFactor = Math.max(0.2, zoomFactor / 1.2);
+    updateZoomLabel();
+    renderDocument();
+  });
+}
+if (zoomResetBtn) {
+  zoomResetBtn.addEventListener('click', () => {
+    zoomFactor = 1;
+    updateZoomLabel();
+    renderDocument();
+  });
+}
 
 window.addEventListener('resize', () => {
   if (currentDocument) {
@@ -587,6 +807,17 @@ window.pubViewer.onPubFileLoaded(result => {
   loadDocumentIntoView('Publisher import', result);
 });
 
+window.pubViewer.onPubFileLoadFailed(error => {
+  const message = error?.message || 'Unknown load error';
+  appendLoadLog(`.pub load failed: ${message}`, 'error');
+  setStatus(`Open failed: ${message}`);
+});
+
+window.pubViewer.onPubLoadLog(event => {
+  if (!event || !event.message) return;
+  appendLoadLog(event.message, event.level || 'info', event.timestamp);
+});
+
 window.pubViewer.onProjectFileLoaded(result => {
   if (!result) return;
   loadDocumentIntoView('AltPublisher project', result);
@@ -594,6 +825,15 @@ window.pubViewer.onProjectFileLoaded(result => {
 
 window.pubViewer.onDiagnosticsVisibilityChanged(visible => {
   diagnosticsPane.classList.toggle('hidden', !visible);
+  splitterRenderDiagnostics.style.display = visible ? 'block' : 'none';
+  if (!visible) {
+    splitterDiagnosticsLog.style.display = 'none';
+  } else {
+    splitterDiagnosticsLog.style.display = 'block';
+  }
+  if (currentDocument) {
+    renderDocument();
+  }
 });
 
 window.addEventListener('keydown', event => {
@@ -609,4 +849,21 @@ window.addEventListener('keydown', event => {
 
 window.pubViewer.onSaveRequested(saveProjectFile);
 
+if (renderPane) {
+  renderPane.addEventListener('wheel', event => {
+    if (!event.ctrlKey) return;
+    event.preventDefault();
+    const delta = event.deltaY < 0 ? 1.1 : 0.9;
+    zoomFactor = Math.max(0.2, Math.min(8, zoomFactor * delta));
+    updateZoomLabel();
+    renderDocument();
+  }, { passive: false });
+}
+
+wireSplitter(splitterTreeDetail, treePane, detailPane);
+wireSplitter(splitterDetailRender, detailPane, renderPane);
+wireSplitter(splitterRenderDiagnostics, renderPane, diagnosticsPane);
+wireSplitter(splitterDiagnosticsLog, diagnosticsPane, logPane);
+renderLoadLog();
+updateZoomLabel();
 updateUndoRedoButtons();

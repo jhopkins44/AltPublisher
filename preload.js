@@ -8,6 +8,12 @@ contextBridge.exposeInMainWorld('pubViewer', {
   onPubFileLoaded: callback => {
     ipcRenderer.on('pub-file-loaded', (_event, data) => callback(data));
   },
+  onPubFileLoadFailed: callback => {
+    ipcRenderer.on('pub-file-load-failed', (_event, error) => callback(error));
+  },
+  onPubLoadLog: callback => {
+    ipcRenderer.on('pub-load-log', (_event, event) => callback(event));
+  },
   onProjectFileLoaded: callback => {
     ipcRenderer.on('project-file-loaded', (_event, data) => callback(data));
   },

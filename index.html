@@ -22,7 +22,7 @@
 
       .toolbar {
         display: grid;
-        grid-template-columns: auto auto auto auto auto auto 1fr;
+        grid-template-columns: auto auto auto auto auto auto auto auto auto 1fr;
         align-items: center;
         gap: 10px;
         padding: 12px 16px;
@@ -61,37 +61,43 @@
 
       .layout {
         height: calc(100% - 58px);
-        display: grid;
-        grid-template-columns: 0.9fr 0.9fr 1.4fr 0.9fr;
+        display: flex;
         min-height: 0;
+        overflow-x: auto;
       }
 
       .tree-pane,
       .detail-pane,
       .render-pane,
       .diagnostics-pane {
+        flex: 0 0 auto;
         min-height: 0;
         overflow: auto;
       }
 
       .tree-pane {
+        width: 260px;
         background: #0d0d0d;
         border-right: 1px solid #2a2a2a;
         padding: 12px;
       }
 
       .detail-pane {
+        width: 300px;
         background: #141414;
         border-right: 1px solid #2a2a2a;
         padding: 16px;
       }
 
       .render-pane {
+        flex: 1 1 auto;
+        min-width: 360px;
         background: #101010;
         padding: 12px;
       }
 
       .diagnostics-pane {
+        width: 260px;
         background: #141414;
         border-left: 1px solid #2a2a2a;
         padding: 12px;
@@ -99,6 +105,27 @@
 
       .diagnostics-pane.hidden {
         display: none;
+      }
+
+      .log-pane {
+        width: 280px;
+        background: #0f1318;
+        border-left: 1px solid #2a2a2a;
+        padding: 12px;
+        overflow: auto;
+      }
+
+      .splitter {
+        width: 6px;
+        cursor: col-resize;
+        background: #1f1f1f;
+        border-left: 1px solid #2a2a2a;
+        border-right: 1px solid #2a2a2a;
+      }
+
+      .splitter:hover,
+      .splitter.dragging {
+        background: #2c2c2c;
       }
 
       .render-stage {
@@ -127,6 +154,37 @@
         margin-left: 14px;
         border-left: 1px solid rgba(255, 255, 255, 0.08);
         padding-left: 10px;
+      }
+
+      .section-title {
+        margin: 0 0 8px 0;
+        font-size: 14px;
+        color: #bfc7d6;
+      }
+
+      .element-tree {
+        margin-bottom: 14px;
+        border-bottom: 1px solid #2a2a2a;
+        padding-bottom: 12px;
+      }
+
+      .element-item {
+        display: block;
+        width: 100%;
+        border: 1px solid #2c2c2c;
+        background: #1a1a1a;
+        color: #ddd;
+        text-align: left;
+        padding: 6px 8px;
+        border-radius: 4px;
+        margin-bottom: 6px;
+        font-size: 12px;
+      }
+
+      .element-item.selected {
+        border-color: #4ea9ff;
+        background: #102338;
+        color: #cde8ff;
       }
 
       details {
@@ -261,10 +319,42 @@
         line-height: 1.4;
       }
 
+      .zoom-value {
+        color: #bcc5d6;
+        font-size: 13px;
+        min-width: 48px;
+      }
+
       .doc-warning {
         margin-top: 10px;
         color: #ffc980;
         font-size: 12px;
+      }
+
+      .log-messages {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 12px;
+      }
+
+      .log-entry {
+        border: 1px solid #2d3642;
+        background: #121923;
+        border-radius: 6px;
+        padding: 6px 8px;
+        line-height: 1.35;
+      }
+
+      .log-entry.error {
+        border-color: #6a2b2b;
+        background: #2a1717;
+        color: #ffd7d7;
+      }
+
+      .log-entry .time {
+        color: #8ea4bd;
+        margin-right: 8px;
       }
 
       @media print {
@@ -297,28 +387,48 @@
       <button id="printBtn">Print</button>
       <button id="undoBtn">Undo</button>
       <button id="redoBtn">Redo</button>
+      <button id="zoomOutBtn">Zoom -</button>
+      <button id="zoomResetBtn">Zoom 100%</button>
+      <button id="zoomInBtn">Zoom +</button>
       <div id="status" class="status">Open a .pub file to inspect, edit, and save as AltPublisher JSON.</div>
     </div>
     <div class="layout" id="layoutRoot">
       <div class="tree-pane" id="treePane">
-        <div class="empty">Choose a Publisher file to see the OLE and Escher structure tree.</div>
+        <div class="section-title">Elements</div>
+        <div id="elementTree" class="element-tree">
+          <div class="empty">Open a file to see renderable elements.</div>
+        </div>
+        <div class="section-title">Structure</div>
+        <div id="structureTree">
+          <div class="empty">Choose a Publisher file to see the OLE and Escher structure tree.</div>
+        </div>
       </div>
+      <div class="splitter" id="splitterTreeDetail"></div>
       <div class="detail-pane" id="detailPane">
         <div class="empty">Select a tree node or drawing object to inspect details.</div>
       </div>
+      <div class="splitter" id="splitterDetailRender"></div>
       <div class="render-pane" id="renderPane">
         <div class="legend">
-          Document render from canonical model. Click a drawable object to edit numeric bounds.
+          Document render from canonical model. Click a drawable object to edit numeric bounds. Use Ctrl+MouseWheel to zoom.
         </div>
         <div id="documentWarnings"></div>
         <div class="render-stage" id="renderStage">
           <div class="empty">The layout preview will appear here.</div>
         </div>
       </div>
+      <div class="splitter" id="splitterRenderDiagnostics"></div>
       <div class="diagnostics-pane" id="diagnosticsPane">
         <div class="title" style="font-size:16px;">Unsupported Records</div>
         <div id="diagnosticsSummary" class="legend">No diagnostics loaded.</div>
         <div id="diagnosticsTableWrap" class="empty">Open a .pub to view unsupported/unknown records.</div>
+      </div>
+      <div class="splitter" id="splitterDiagnosticsLog"></div>
+      <div class="log-pane" id="logPane">
+        <div class="title" style="font-size:16px;">Load Log</div>
+        <div id="logMessages" class="log-messages">
+          <div class="empty">Load and processing messages will appear here.</div>
+        </div>
       </div>
     </div>
     <script src="./renderer.js"></script>
