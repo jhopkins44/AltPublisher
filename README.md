@@ -20,3 +20,13 @@ Electron desktop app for opening Microsoft Publisher (`.pub`) files, inspecting 
 npm install
 npm start
 ```
+
+## Export and compare rendered output
+
+To generate a PNG render from a `.pub` file and compare it against the shipped reference PNGs:
+
+```bash
+node compare-render-output.js
+```
+
+This script reads the sample Publisher documents, exports each rendered page to a PNG, and writes a summary report to `render-comparison-summary.md` without modifying the reference images.
